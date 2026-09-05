@@ -1,0 +1,26 @@
+{
+  "name": "dms-roon-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Roon sidecar for the DankMaterialShell Roon plugin",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node src/index.js --state-dir /tmp/roon-dev --linger 5"
+  },
+  "dependencies": {
+    "node-roon-api": "github:roonlabs/node-roon-api",
+    "node-roon-api-transport": "github:roonlabs/node-roon-api-transport",
+    "node-roon-api-browse": "github:roonlabs/node-roon-api-browse",
+    "node-roon-api-image": "github:roonlabs/node-roon-api-image",
+    "node-roon-api-status": "github:roonlabs/node-roon-api-status",
+    "mpris-service": "^2.1.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
