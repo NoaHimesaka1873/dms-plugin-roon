@@ -22,6 +22,7 @@ class MprisBridge {
     this._seekAt = 0;
     this._playing = false;
     this._lastTrackId = "";
+    this._resyncSeeks = 0;
   }
 
   get active() {
@@ -80,6 +81,7 @@ class MprisBridge {
   setZone(zoneId) {
     this.zoneId = zoneId || null;
     this._lastTrackId = "";
+    this._resyncSeeks = 3;
     this.update();
   }
 
@@ -89,12 +91,21 @@ class MprisBridge {
     return this._seekBase + extra;
   }
 
+  // Clients like Quickshell only re-read Position on track/status changes and
+  // Seeked, then extrapolate. Right after a track change Roon's zone still
+  // carries the old track's seek position, so a client can anchor on that and
+  // run past the end of the new track. Send Seeked on the first reports after
+  // every track change so they re-anchor on the real position.
   onSeek(zoneId, position) {
     if (zoneId !== this.zoneId) return;
     const drift = Math.abs(this.position() - position);
     this._seekBase = Number(position) || 0;
     this._seekAt = Date.now();
-    if (drift > 2 && this.player) this.player.seeked(Math.round(this._seekBase * 1e6));
+    if (!this.player) return;
+    if (drift > 2 || this._resyncSeeks > 0) {
+      if (this._resyncSeeks > 0) this._resyncSeeks--;
+      this.player.seeked(Math.round(this._seekBase * 1e6));
+    }
   }
 
   update() {
@@ -120,8 +131,15 @@ class MprisBridge {
       this._seekAt = Date.now();
       this._playing = playing;
     }
+    let jumped = false;
     if (np && np.position != null) {
-      this._seekBase = np.position;
+      // Never carry a position past the (new) track's end.
+      const next = np.length > 0 && np.position > np.length ? 0 : np.position;
+      // A zone update can move the position too (repeat-one wrapping to 0, a
+      // seek from another Roon remote). Clients never re-read Position on
+      // their own, so tell them.
+      jumped = this._seekAt > 0 && Math.abs(this.position() - next) > 2;
+      this._seekBase = next;
       this._seekAt = Date.now();
     }
     p.playbackStatus = z.state === "playing" || z.state === "loading" ? "Playing" : z.state === "paused" ? "Paused" : "Stopped";
@@ -158,10 +176,10 @@ class MprisBridge {
       }
       if (trackId !== this._lastTrackId) {
         this._lastTrackId = trackId;
-        p.metadata = meta;
-      } else {
-        p.metadata = meta;
+        this._resyncSeeks = 3;
       }
+      p.metadata = meta;
+      if (jumped) p.seeked(Math.round(this._seekBase * 1e6));
     } else {
       p.metadata = {};
     }
