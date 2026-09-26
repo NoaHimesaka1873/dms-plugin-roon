@@ -134,7 +134,11 @@ PluginComponent {
                 queueRemaining: RoonService.queueItemsRemaining,
                 position: Math.round(RoonService.position),
                 length: RoonService.length,
-                mpris: RoonService.mprisActive
+                mpris: RoonService.mprisActive,
+                lyrics: RoonService.lyricsSource,
+                lyricLines: RoonService.lyricLines.length,
+                lyricsSynced: RoonService.lyricsSynced,
+                roonUnsyncedOnly: RoonService.roonUnsyncedOnly
             });
         }
         function popout(tab: string): string {

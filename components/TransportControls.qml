@@ -3,97 +3,101 @@ import qs.Common
 import qs.Widgets
 import "../services"
 
-// shuffle · previous · play/pause · next · loop
+// shuffle · previous · play/pause · next · repeat, as Material 3 icon buttons
+// like the built-in media card: a filled pill for play, standard buttons
+// around it, shuffle and repeat as toggles.
 Item {
     id: root
 
     property int playSize: 56
     property int sideSize: 40
     property bool showModes: true
+    property color containerColor: RoonService.accentContainer
+    property color onContainerColor: RoonService.onAccentContainer
+    property color contentColor: Theme.surfaceText
+    property color accentColor: RoonService.accent
     readonly property bool enabled_: RoonService.paired && RoonService.selectedZone !== null
+    readonly property bool medium: playSize >= 52
 
-    implicitHeight: playSize
+    implicitHeight: medium ? Theme.buttonHeightM : Theme.buttonHeightS
     implicitWidth: row.implicitWidth
 
     Row {
         id: row
         anchors.centerIn: parent
-        spacing: Theme.spacingM
+        spacing: root.medium ? Theme.spacingS : Theme.spacingXS
 
-        DankActionButton {
+        DankIconButton {
             anchors.verticalCenter: parent.verticalCenter
             visible: root.showModes
+            size: root.medium ? "m" : "s"
+            widthMode: "narrow"
             iconName: "shuffle"
-            buttonSize: root.sideSize
-            iconSize: Theme.iconSize - 4
-            iconColor: RoonService.shuffle ? Theme.primary : Theme.surfaceVariantText
-            tooltipText: RoonService.shuffle ? "Shuffle on" : "Shuffle off"
+            checkable: true
+            checked: RoonService.shuffle
+            containerColor: root.containerColor
+            contentColor: root.onContainerColor
+            iconColor: checked ? root.onContainerColor : root.contentColor
             enabled: root.enabled_
+            tooltipText: RoonService.shuffle ? "Shuffle on" : "Shuffle off"
+            Accessible.name: "Shuffle"
             onClicked: RoonService.setShuffle(!RoonService.shuffle)
         }
 
-        DankActionButton {
+        DankIconButton {
             anchors.verticalCenter: parent.verticalCenter
+            size: root.medium ? "m" : "s"
             iconName: "skip_previous"
-            buttonSize: root.sideSize
-            iconSize: Theme.iconSize
-            iconColor: Theme.surfaceText
-            opacity: RoonService.canPrevious ? 1 : 0.35
+            iconColor: root.contentColor
             enabled: root.enabled_ && RoonService.canPrevious
+            opacity: enabled ? 1 : 0.38
+            Accessible.name: "Previous"
             onClicked: RoonService.previous()
         }
 
-        Rectangle {
+        DankIconButton {
             anchors.verticalCenter: parent.verticalCenter
-            width: root.playSize
-            height: root.playSize
-            radius: root.playSize / 2
-            color: playArea.pressed ? Qt.darker(Theme.primary, 1.15) : (playArea.containsMouse ? Qt.lighter(Theme.primary, 1.08) : Theme.primary)
-            opacity: root.enabled_ ? 1 : 0.4
-
-            Behavior on color {
-                ColorAnimation {
-                    duration: Theme.shortDuration
-                }
-            }
-
-            DankIcon {
-                anchors.centerIn: parent
-                name: RoonService.isPlaying ? "pause" : "play_arrow"
-                size: root.playSize * 0.55
-                color: Theme.onPrimary
-            }
-
-            MouseArea {
-                id: playArea
-                anchors.fill: parent
-                hoverEnabled: true
-                enabled: root.enabled_
-                cursorShape: Qt.PointingHandCursor
-                onClicked: RoonService.playPause()
-            }
+            size: root.medium ? "m" : "s"
+            width: root.medium ? 96 : 72
+            variant: "filled"
+            round: false
+            checkable: true
+            checked: RoonService.isPlaying
+            iconFilled: false
+            radius: Theme.buttonRadius(width, height, buttonSize, pressed, checked)
+            iconName: RoonService.isPlaying ? "pause" : "play_arrow"
+            containerColor: root.containerColor
+            contentColor: root.onContainerColor
+            enabled: root.enabled_
+            Accessible.name: RoonService.isPlaying ? "Pause" : "Play"
+            onClicked: RoonService.playPause()
         }
 
-        DankActionButton {
+        DankIconButton {
             anchors.verticalCenter: parent.verticalCenter
+            size: root.medium ? "m" : "s"
             iconName: "skip_next"
-            buttonSize: root.sideSize
-            iconSize: Theme.iconSize
-            iconColor: Theme.surfaceText
-            opacity: RoonService.canNext ? 1 : 0.35
+            iconColor: root.contentColor
             enabled: root.enabled_ && RoonService.canNext
+            opacity: enabled ? 1 : 0.38
+            Accessible.name: "Next"
             onClicked: RoonService.next()
         }
 
-        DankActionButton {
+        DankIconButton {
             anchors.verticalCenter: parent.verticalCenter
             visible: root.showModes
+            size: root.medium ? "m" : "s"
+            widthMode: "narrow"
             iconName: RoonService.loop === "loop_one" ? "repeat_one" : "repeat"
-            buttonSize: root.sideSize
-            iconSize: Theme.iconSize - 4
-            iconColor: RoonService.loop !== "disabled" ? Theme.primary : Theme.surfaceVariantText
-            tooltipText: RoonService.loop === "loop_one" ? "Repeat one" : (RoonService.loop === "loop" ? "Repeat all" : "Repeat off")
+            checkable: true
+            checked: RoonService.loop !== "disabled"
+            containerColor: root.containerColor
+            contentColor: root.onContainerColor
+            iconColor: checked ? root.onContainerColor : root.contentColor
             enabled: root.enabled_
+            tooltipText: RoonService.loop === "loop_one" ? "Repeat one" : (RoonService.loop === "loop" ? "Repeat all" : "Repeat off")
+            Accessible.name: "Repeat"
             onClicked: RoonService.cycleLoop()
         }
     }

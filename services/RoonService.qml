@@ -45,6 +45,36 @@ Singleton {
     property bool mprisAvailable: false
     property bool mprisActive: false
     property string lastError: ""
+    // Lyrics Roon pushed per zone (LRC text), via the web display connection.
+    property var lyricsByZone: ({})
+    readonly property string lyrics: lyricsByZone[selectedZoneId] ?? ""
+    // Roon only pushes synced lyrics; for anything else (unsynced, or the
+    // Roon display turned off) lyrics views fall back to DMS's own lookup,
+    // the one the dash Media tab uses.
+    property var fallbackLyrics: null   // { key, lines, source }
+    // Roon has lyrics for the track but only unsynced ones, which it doesn't send out.
+    property var lyricsUnsyncedByZone: ({})
+    readonly property bool roonUnsyncedOnly: !!lyricsUnsyncedByZone[selectedZoneId]
+    property int _lyricsUsers: 0
+    readonly property string _lyricsTrackKey: hasTrack ? [selectedZoneId, title, rawArtist, album, length].join("\u0001") : ""
+    readonly property bool lyricsFromFallback: !lyrics && fallbackLyrics !== null && fallbackLyrics.key === _lyricsTrackKey && fallbackLyrics.lines.length > 0
+    readonly property string lyricsSource: lyrics ? "Roon" : (lyricsFromFallback ? fallbackLyrics.source : "")
+    readonly property bool lyricsLoading: !lyrics && !lyricsFromFallback && hasTrack && (lyricsFallbackTimer.running || _lyricsRequestKey !== "")
+    property string _lyricsRequestKey: ""
+    // [{ time, text }] sorted by time; time is -1 for unsynced lyrics.
+    readonly property var lyricLines: lyrics ? parseLrc(lyrics) : (lyricsFromFallback ? fallbackLyrics.lines : [])
+    readonly property bool lyricsSynced: lyricLines.length > 0 && lyricLines[0].time >= 0
+    // Roon's loudness outline for the track (0..1 per slice), same source as lyrics.
+    property var waveformByZone: ({})
+    readonly property var waveform: waveformByZone[selectedZoneId] ?? []
+    // Album-art accent from DMS, as long as the art it reads is Roon's (Roon is the active MPRIS player).
+    readonly property bool artAccent: MprisController.activePlayer?.identity === "Roon"
+    readonly property color accent: artAccent ? MediaAccentService.accent : Theme.primary
+    readonly property color accentContainer: artAccent ? MediaAccentService.accentContainer : Theme.primaryContainer
+    readonly property color onAccentContainer: artAccent ? MediaAccentService.onAccentContainer : Theme.onPrimaryContainer
+    // "flat" | "wavy" | "spectrum" (Roon's waveform)
+    readonly property string seekStyle: String(setting("seekStyle", "spectrum"))
+    readonly property bool lyricsDisplayEnabled: !!setting("lyricsDisplayZone", true)
     readonly property bool paired: connectionState === "paired"
 
     // --- zones ----------------------------------------------------------------
@@ -119,6 +149,9 @@ Singleton {
             const keys = ["connectionMode", "manualHost", "manualPort", "mprisEnabled"];
             if (keys.some(k => before[k] !== settings[k]))
                 _pushSettings();
+            // The display service is registered once at startup.
+            if ((before.lyricsDisplayZone ?? true) !== (settings.lyricsDisplayZone ?? true))
+                restartBridge();
         }
     }
 
@@ -165,7 +198,10 @@ Singleton {
             return;
         }
         _stopping = false;
-        bridge.command = ["node", "--no-deprecation", pluginDir + "/dist/roon-bridge.cjs", "--state-dir", stateDir];
+        const cmd = ["node", "--no-deprecation", pluginDir + "/dist/roon-bridge.cjs", "--state-dir", stateDir];
+        if (lyricsDisplayEnabled)
+            cmd.push("--display-zone");
+        bridge.command = cmd;
         bridgeState = "starting";
         bridge.running = true;
         helloTimer.restart();
@@ -350,6 +386,33 @@ Singleton {
         case "mpris":
             mprisActive = !!msg.active;
             break;
+        case "waveform": {
+            const map = Object.assign({}, waveformByZone);
+            if (msg.waveform && msg.waveform.length > 0)
+                map[msg.zoneId] = msg.waveform;
+            else
+                delete map[msg.zoneId];
+            waveformByZone = map;
+            break;
+        }
+        case "lyrics_unsynced": {
+            const map = Object.assign({}, lyricsUnsyncedByZone);
+            if (msg.value)
+                map[msg.zoneId] = true;
+            else
+                delete map[msg.zoneId];
+            lyricsUnsyncedByZone = map;
+            break;
+        }
+        case "lyrics": {
+            const map = Object.assign({}, lyricsByZone);
+            if (msg.lrc)
+                map[msg.zoneId] = msg.lrc;
+            else
+                delete map[msg.zoneId];
+            lyricsByZone = map;
+            break;
+        }
         case "error":
             lastError = msg.message || "";
             console.warn("[roon-bridge error]", msg.code, msg.message);
@@ -385,6 +448,11 @@ Singleton {
         coreHost = msg.host || "";
         coreHttpPort = msg.httpPort || 0;
         statusMessage = msg.message || "";
+        if (connectionState !== "paired") {
+            lyricsByZone = ({});
+            waveformByZone = ({});
+            lyricsUnsyncedByZone = ({});
+        }
         if (connectionState === "paired" && prev !== "paired")
             coreConnected();
         else if (connectionState === "disconnected" && prev === "paired")
@@ -614,13 +682,22 @@ Singleton {
     }
 
     // --- queue -------------------------------------------------------------------------
+    // Refcounted: the popout and dash queue views come and go independently.
+    property int _queueUsers: 0
+
     function subscribeQueue() {
+        _queueUsers += 1;
+        if (queueSubscribed)
+            return;
         queueSubscribed = true;
         if (selectedZoneId)
             send({ type: "queue_subscribe", zoneId: selectedZoneId, max: 50 });
     }
 
     function unsubscribeQueue() {
+        _queueUsers = Math.max(0, _queueUsers - 1);
+        if (_queueUsers > 0 || !queueSubscribed)
+            return;
         queueSubscribed = false;
         send({ type: "queue_unsubscribe" });
         queue = [];
@@ -817,6 +894,101 @@ Singleton {
         const cmd = String(setting("roonAppCommand", "") || defaultAppCommand);
         Quickshell.execDetached(["sh", "-c", cmd]);
         return false;
+    }
+
+    function parseLrc(text) {
+        if (!text)
+            return [];
+        const synced = [];
+        const plain = [];
+        for (const raw of String(text).split("\n")) {
+            const stamps = [];
+            let rest = raw;
+            let m;
+            while ((m = /^\s*\[(\d+):(\d+(?:[.:]\d+)?)\]/.exec(rest)) !== null) {
+                stamps.push(Number(m[1]) * 60 + Number(m[2].replace(":", ".")));
+                rest = rest.substring(m[0].length);
+            }
+            const line = rest.replace(/<\d+:\d+(?:[.:]\d+)?>/g, "").trim();
+            if (stamps.length === 0) {
+                if (!/^\s*\[[a-z]+:.*\]\s*$/i.test(raw) && line)
+                    plain.push({ time: -1, text: line });
+                continue;
+            }
+            for (const t of stamps)
+                synced.push({ time: t, text: line });
+        }
+        if (synced.length > 0)
+            return synced.sort((a, b) => a.time - b.time);
+        return plain;
+    }
+
+    function acquireLyrics() {
+        _lyricsUsers += 1;
+        lyricsFallbackTimer.restart();
+    }
+
+    function releaseLyrics() {
+        _lyricsUsers = Math.max(0, _lyricsUsers - 1);
+    }
+
+    on_LyricsTrackKeyChanged: lyricsFallbackTimer.restart()
+    onLyricsChanged: lyricsFallbackTimer.restart()
+
+    // Give Roon a moment to push its LRC (it follows the track change within
+    // milliseconds) before asking DMS.
+    Timer {
+        id: lyricsFallbackTimer
+        interval: 1200
+        onTriggered: root._fetchFallbackLyrics()
+    }
+
+    function _fetchFallbackLyrics() {
+        const key = _lyricsTrackKey;
+        if (lyrics || !key || _lyricsUsers === 0 || _lyricsRequestKey === key || (fallbackLyrics && fallbackLyrics.key === key))
+            return;
+        if (!DMSService.isConnected)
+            return;
+        _lyricsRequestKey = key;
+        const providers = MediaOptions.enabledLyricsProviders;
+        DMSService.sendRequest("lyrics.get", {
+            "title": title,
+            "artist": rawArtist.split(" / ")[0],
+            "album": album,
+            "duration": length,
+            "fileUrl": "",
+            "allowNetwork": providers.length > 0,
+            "providers": providers
+        }, response => {
+            if (root._lyricsRequestKey === key)
+                root._lyricsRequestKey = "";
+            const r = response && !response.error ? response.result : null;
+            let lines = [];
+            if (r && r.found && !r.instrumental) {
+                lines = (r.synced || []).filter(l => Number.isFinite(l.t) && typeof l.x === "string").map(l => ({
+                            time: l.t,
+                            text: l.x
+                        }));
+                if (lines.length === 0)
+                    lines = String(r.plain || "").split("\n").map(t => t.trim()).filter(t => t.length > 0).map(t => ({
+                                time: -1,
+                                text: t
+                            }));
+            }
+            root.fallbackLyrics = {
+                key: key,
+                lines: lines,
+                source: r && r.attribution && r.attribution.name ? r.attribution.name : ""
+            };
+        });
+    }
+
+    // Playback position right now, interpolated from the last seek report.
+    function currentPosition() {
+        if (!_seekAt)
+            return _seekBase;
+        const p = _seekBase + (isPlaying ? (Date.now() - _seekAt) / 1000 : 0);
+        return length > 0 ? Math.min(length, p) : p;
     }
 
     // Roon joins credits with " / "; show them as a natural list instead.

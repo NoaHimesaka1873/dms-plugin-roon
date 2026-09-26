@@ -108,6 +108,54 @@ PluginSettings {
         defaultValue: true
     }
 
+    // ---- Lyrics --------------------------------------------------------------------
+    StyledText {
+        width: parent.width
+        topPadding: Theme.spacingM
+        text: "Lyrics"
+        font.pixelSize: Theme.fontSizeLarge
+        font.weight: Font.Bold
+        color: Theme.surfaceText
+    }
+
+    ToggleSetting {
+        settingKey: "lyricsDisplayZone"
+        label: "Lyrics from Roon"
+        description: "Connects as a Roon web display (it shows up in Roon → Settings → Displays) so Roon sends the lyrics of what's playing. They show up in the dash Media tab through the MPRIS bridge, and in the Roon dash tab. Toggling restarts the bridge."
+        defaultValue: true
+    }
+
+    StyledText {
+        width: parent.width
+        visible: RoonService.lyricsDisplayEnabled && RoonService.paired
+        text: RoonService.lyrics ? "Receiving lyrics for " + (RoonService.selectedZone ? RoonService.selectedZone.name : "the selected zone") : "Roon has no lyrics for the current track"
+        font.pixelSize: Theme.fontSizeSmall
+        color: RoonService.lyrics ? Theme.primary : Theme.surfaceVariantText
+        wrapMode: Text.WordWrap
+    }
+
+    // ---- Now playing ---------------------------------------------------------------
+    StyledText {
+        width: parent.width
+        topPadding: Theme.spacingM
+        text: "Now playing"
+        font.pixelSize: Theme.fontSizeLarge
+        font.weight: Font.Bold
+        color: Theme.surfaceText
+    }
+
+    SelectionSetting {
+        settingKey: "seekStyle"
+        label: "Seek bar style"
+        description: "Spectrum draws Roon's waveform of the track (needs Lyrics from Roon, falls back to Wavy)"
+        options: [
+            { label: "Flat", value: "flat" },
+            { label: "Wavy", value: "wavy" },
+            { label: "Spectrum", value: "spectrum" }
+        ]
+        defaultValue: "spectrum"
+    }
+
     // ---- Bar widget --------------------------------------------------------------
     StyledText {
         width: parent.width
@@ -124,6 +172,24 @@ PluginSettings {
         description: "Text width of the plain Roon widget (same scale as the built-in media widget)"
         options: root.sizeOptions
         defaultValue: "2"
+    }
+
+    SelectionSetting {
+        settingKey: "pillClickOpens"
+        label: "Click opens"
+        description: "What clicking the widget opens"
+        options: [
+            { label: "Popout", value: "popout" },
+            { label: "Roon dash tab", value: "dash" }
+        ]
+        defaultValue: "popout"
+    }
+
+    ToggleSetting {
+        settingKey: "pillAdaptiveWidth"
+        label: "Fit to title"
+        description: "Shrink the widget when the title is shorter than the size limit"
+        defaultValue: true
     }
 
     SelectionSetting {
@@ -155,6 +221,18 @@ PluginSettings {
         label: "Show when idle"
         description: "Keep the widget visible while nothing is playing or Roon is unreachable"
         defaultValue: false
+    }
+
+    SelectionSetting {
+        settingKey: "pillScrollMode"
+        label: "Scroll action"
+        description: "What the mouse wheel does over the widget"
+        options: [
+            { label: "Volume", value: "volume" },
+            { label: "Change track", value: "song" },
+            { label: "Nothing", value: "nothing" }
+        ]
+        defaultValue: "volume"
     }
 
     SliderSetting {

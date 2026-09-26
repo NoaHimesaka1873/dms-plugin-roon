@@ -14,7 +14,7 @@ const UNAUTHORIZED_AFTER_MS = 5000;
 const OTHER_ZONE_SEEK_THROTTLE_MS = 5000;
 
 // Owns the Roon connection (discovery or manual), the zone cache and the
-// transport commands. Emits: status, zones, zone_changed, seek, queue, paired, unpaired.
+// transport commands. Emits: status, zones, zone_changed, seek, queue, selected, paired, unpaired.
 class RoonBridge extends EventEmitter {
   constructor(opts) {
     super();

@@ -24718,8 +24718,9 @@ var require_mpris = __commonJS({
       static {
         __name(this, "MprisBridge");
       }
-      constructor(bridge, log) {
+      constructor(bridge, log, lyrics) {
         this.bridge = bridge;
+        this.lyrics = lyrics || null;
         this.log = log || (() => {
         });
         this.player = null;
@@ -24851,6 +24852,12 @@ var require_mpris = __commonJS({
           };
           const art = this.bridge.artUrl(np.imageKey, 600);
           if (art) meta["mpris:artUrl"] = art;
+          const lyrics = this.lyrics ? this.lyrics.current(z.zoneId, raw) : null;
+          const url = lyrics ? this.lyrics.trackUrl(lyrics, np) : "";
+          if (url) {
+            meta["xesam:url"] = url;
+            meta["xesam:asText"] = this.lyrics.plainText(lyrics);
+          }
           if (trackId !== this._lastTrackId) {
             this._lastTrackId = trackId;
             p.metadata = meta;
@@ -24890,6 +24897,311 @@ var require_mpris = __commonJS({
   }
 });
 
+// src/lyrics.js
+var require_lyrics = __commonJS({
+  "src/lyrics.js"(exports2, module2) {
+    "use strict";
+    var fs2 = require("node:fs");
+    var os2 = require("node:os");
+    var path2 = require("node:path");
+    var crypto = require("node:crypto");
+    var EventEmitter = require("node:events");
+    var RoonApi = require_lib();
+    var RoonApiTransport = require_lib2();
+    var RoonApiImage = require_lib4();
+    var DISPLAY_EXTENSION_ID = "com.roonlabs.display_zone";
+    var DISPLAY_SERVICE = "com.roonlabs.zonedisplay:1";
+    var RECONNECT_MS = 5e3;
+    var SIDECAR_KEEP = 200;
+    function trackSignature(rawZone) {
+      const np = rawZone && rawZone.now_playing;
+      if (!np) return "";
+      const three = np.three_line || {};
+      const one = np.one_line || {};
+      return [np.image_key || "", three.line1 || one.line1 || "", three.line2 || ""].join("|");
+    }
+    __name(trackSignature, "trackSignature");
+    var RoonDisplay2 = class extends EventEmitter {
+      static {
+        __name(this, "RoonDisplay");
+      }
+      constructor({ stateDir, log }) {
+        super();
+        this.log = log || (() => {
+        });
+        this.stateFile = path2.join(stateDir, "display-state.json");
+        this.display = {
+          display_key: loadDisplayKey(stateDir),
+          auto_name: "DankMaterialShell on " + os2.hostname(),
+          active_zone_id: null
+        };
+        this.host = "";
+        this.port = 0;
+        this.moo = null;
+        this.tracks = /* @__PURE__ */ new Map();
+        this._timer = null;
+        this._stopped = true;
+        this.roon = new RoonApi({
+          extension_id: DISPLAY_EXTENSION_ID,
+          display_name: "Roon API Display Zone",
+          display_version: "1.0.0",
+          publisher: "Roon Labs, LLC",
+          email: "contact@roonlabs.com",
+          log_level: "none",
+          get_persisted_state: /* @__PURE__ */ __name(() => this._loadState(), "get_persisted_state"),
+          set_persisted_state: /* @__PURE__ */ __name((st) => this._saveState(st), "set_persisted_state"),
+          core_paired: /* @__PURE__ */ __name((core) => this._onPaired(core), "core_paired"),
+          core_unpaired: /* @__PURE__ */ __name(() => this.emit("cleared"), "core_unpaired")
+        });
+        const matches = /* @__PURE__ */ __name((req) => req.body && req.body.display_key === this.display.display_key, "matches");
+        this.svc = this.roon.register_service(DISPLAY_SERVICE, {
+          subscriptions: [
+            {
+              subscribe_name: "subscribe_displays",
+              unsubscribe_name: "unsubscribe_displays",
+              start: /* @__PURE__ */ __name((req) => req.send_continue("Subscribed", { displays: [this.display] }), "start")
+            }
+          ],
+          methods: {
+            get_displays: /* @__PURE__ */ __name((req) => req.send_complete("Success", { displays: [this.display] }), "get_displays"),
+            activate: /* @__PURE__ */ __name((req) => {
+              if (!matches(req)) return req.send_complete("InvalidKey");
+              this._setActive(req.body.zone_id || null);
+              req.send_complete("Success");
+            }, "activate"),
+            deactivate: /* @__PURE__ */ __name((req) => {
+              if (!matches(req)) return req.send_complete("InvalidKey");
+              this._setActive(null);
+              req.send_complete("Success");
+            }, "deactivate"),
+            update_settings: /* @__PURE__ */ __name((req) => req.send_complete(matches(req) ? "Success" : "InvalidKey"), "update_settings")
+          }
+        });
+        this.roon.init_services({
+          required_services: [RoonApiTransport, RoonApiImage],
+          provided_services: [{ services: [this.svc] }]
+        });
+      }
+      // Connect to the core the main connection is paired with.
+      start(host, port) {
+        if (!host || !port) return;
+        if (!this._stopped && host === this.host && Number(port) === this.port) return;
+        this.stop();
+        this._stopped = false;
+        this.host = host;
+        this.port = Number(port);
+        this._connect();
+      }
+      stop() {
+        this._stopped = true;
+        if (this._timer) clearTimeout(this._timer);
+        this._timer = null;
+        if (this.moo) {
+          const moo = this.moo;
+          this.moo = null;
+          try {
+            moo.transport.close();
+          } catch {
+          }
+        }
+      }
+      // Show the zone selected in DMS, so the display in Roon's list matches the bar.
+      follow(zoneId) {
+        if ((zoneId || null) === this.display.active_zone_id) return;
+        this.display.active_zone_id = zoneId || null;
+        this._announce();
+      }
+      _connect() {
+        if (this._stopped || this.moo) return;
+        this.moo = this.roon.ws_connect({
+          host: this.host,
+          port: this.port,
+          onclose: /* @__PURE__ */ __name(() => {
+            this.moo = null;
+            this.emit("cleared");
+            if (this._stopped) return;
+            this._timer = setTimeout(() => {
+              this._timer = null;
+              this._connect();
+            }, RECONNECT_MS);
+          }, "onclose"),
+          onerror: /* @__PURE__ */ __name(() => {
+          }, "onerror")
+        });
+      }
+      _onPaired(core) {
+        this.tracks.clear();
+        core.services.RoonApiTransport.subscribe_zones((resp, body) => {
+          if (!body) return;
+          if (resp === "Subscribed" || resp === "Changed") {
+            for (const z of [...body.zones || [], ...body.zones_added || [], ...body.zones_changed || []]) {
+              const track = trackSignature(z);
+              if (this.tracks.get(z.zone_id) === track) continue;
+              this.tracks.set(z.zone_id, track);
+              if (resp === "Changed") {
+                this.emit("lyrics", { zoneId: z.zone_id, key: null, lrc: "", track });
+                this.emit("waveform", { zoneId: z.zone_id, waveform: null });
+              }
+            }
+            for (const id of body.zones_removed || []) {
+              this.tracks.delete(id);
+              this.emit("lyrics", { zoneId: id, key: null, lrc: "", track: "" });
+              this.emit("waveform", { zoneId: id, waveform: null });
+            }
+            return;
+          }
+          if (resp === "WaveformChanged") {
+            const wf = Array.isArray(body.waveform) && body.waveform.some((v) => v > 0) ? body.waveform.map((v) => Math.round(Number(v) * 1e3) / 1e3) : null;
+            this.emit("waveform", { zoneId: body.zone_id, waveform: wf });
+            return;
+          }
+          if (resp !== "LyricsChanged") return;
+          this.emit("lyrics", {
+            zoneId: body.zone_id,
+            key: body.key == null ? null : String(body.key),
+            lrc: body.lrc || "",
+            track: this.tracks.get(body.zone_id) || ""
+          });
+        });
+      }
+      _setActive(zoneId) {
+        this.display.active_zone_id = zoneId;
+        this._announce();
+      }
+      _announce() {
+        try {
+          this.svc.send_continue_all("subscribe_displays", "Changed", { displays_changed: [this.display] });
+        } catch (e) {
+          this.log("warn", "display: " + e.message);
+        }
+      }
+      _loadState() {
+        try {
+          return JSON.parse(fs2.readFileSync(this.stateFile, "utf8")) || {};
+        } catch {
+          return {};
+        }
+      }
+      _saveState(st) {
+        try {
+          fs2.writeFileSync(this.stateFile + ".tmp", JSON.stringify(st, null, 2));
+          fs2.renameSync(this.stateFile + ".tmp", this.stateFile);
+        } catch (e) {
+          this.log("warn", "display state: " + e.message);
+        }
+      }
+    };
+    function loadDisplayKey(stateDir) {
+      const file = path2.join(stateDir, "display-key");
+      try {
+        const key2 = fs2.readFileSync(file, "utf8").trim();
+        if (key2) return key2;
+      } catch {
+      }
+      const key = crypto.randomUUID();
+      try {
+        fs2.writeFileSync(file, key);
+      } catch {
+      }
+      return key;
+    }
+    __name(loadDisplayKey, "loadDisplayKey");
+    function segment(text, fallback) {
+      let s = String(text || "").replace(/[\/\0]/g, "\u2215").replace(/[\r\n\t]+/g, " ").trim().replace(/^\.+/, "");
+      if (!s) s = fallback;
+      while (Buffer.byteLength(s) > 180) s = s.slice(0, -1);
+      return s;
+    }
+    __name(segment, "segment");
+    var LyricsStore2 = class {
+      static {
+        __name(this, "LyricsStore");
+      }
+      constructor(cacheDir, log) {
+        this.dir = path2.join(cacheDir, "lyrics");
+        this.log = log || (() => {
+        });
+        this.byZone = /* @__PURE__ */ new Map();
+      }
+      // Returns true when the zone's lyrics actually changed.
+      set(zoneId, key, lrc, track) {
+        const text = typeof lrc === "string" && lrc.trim() ? lrc : "";
+        const prev = this.byZone.get(zoneId);
+        if (prev && prev.key === (key || null) && prev.lrc === text && prev.track === (track || "")) return false;
+        if (!prev && !text) return false;
+        if (text) this.byZone.set(zoneId, { key: key || null, lrc: text, track: track || "" });
+        else this.byZone.delete(zoneId);
+        return true;
+      }
+      get(zoneId) {
+        return this.byZone.get(zoneId) || null;
+      }
+      zones() {
+        return Array.from(this.byZone.keys());
+      }
+      // Lyrics for the zone, but only while it still plays the track they came with.
+      current(zoneId, rawZone) {
+        const entry = this.byZone.get(zoneId);
+        if (!entry || entry.track !== trackSignature(rawZone)) return null;
+        return entry;
+      }
+      // file:// URL whose .lrc sibling holds these lyrics, or "" if writing failed.
+      trackUrl(entry, np) {
+        if (!entry || !np) return "";
+        const artist = String(np.artist || "").split(" / ").join(", ");
+        const name = segment(artist ? `${artist} - ${np.title}` : np.title, "Unknown Track");
+        const base = path2.join(this.dir, segment(np.album, "Unknown Album"), name);
+        const lrcPath = base + ".lrc";
+        try {
+          let existing = null;
+          try {
+            existing = fs2.readFileSync(lrcPath, "utf8");
+          } catch {
+          }
+          if (existing !== entry.lrc) {
+            fs2.mkdirSync(path2.dirname(lrcPath), { recursive: true });
+            fs2.writeFileSync(lrcPath + ".tmp", entry.lrc);
+            fs2.renameSync(lrcPath + ".tmp", lrcPath);
+            this._prune();
+          }
+        } catch (e) {
+          this.log("warn", "lyrics: " + e.message);
+          return "";
+        }
+        return "file://" + base.split(path2.sep).map(encodeURIComponent).join("/") + ".roon";
+      }
+      // Plain text for xesam:asText, timestamps stripped.
+      plainText(entry) {
+        if (!entry) return "";
+        return entry.lrc.split("\n").filter((l) => !/^\[[a-z]+:.*\]\s*$/i.test(l.trim())).map((l) => l.replace(/\[\d+:\d+(?:[.:]\d+)?\]/g, "").replace(/<\d+:\d+(?:[.:]\d+)?>/g, "").trim()).join("\n").trim();
+      }
+      // Keep the newest sidecars; lyrics are cheap to get again from Roon.
+      _prune() {
+        try {
+          const files = [];
+          for (const album of fs2.readdirSync(this.dir)) {
+            const albumDir = path2.join(this.dir, album);
+            if (!fs2.statSync(albumDir).isDirectory()) continue;
+            for (const f of fs2.readdirSync(albumDir)) {
+              if (!f.endsWith(".lrc")) continue;
+              const p = path2.join(albumDir, f);
+              files.push({ p, t: fs2.statSync(p).mtimeMs });
+            }
+          }
+          files.sort((a, b) => b.t - a.t);
+          for (const { p } of files.slice(SIDECAR_KEEP)) {
+            fs2.unlinkSync(p);
+            const albumDir = path2.dirname(p);
+            if (fs2.readdirSync(albumDir).length === 0) fs2.rmdirSync(albumDir);
+          }
+        } catch {
+        }
+      }
+    };
+    module2.exports = { RoonDisplay: RoonDisplay2, LyricsStore: LyricsStore2, trackSignature };
+  }
+});
+
 // src/index.js
 var fs = require("node:fs");
 var os = require("node:os");
@@ -24898,12 +25210,15 @@ var { createProtocol } = require_protocol();
 var { RoonBridge } = require_roon();
 var { BrowseSessions } = require_browse();
 var { MprisBridge } = require_mpris();
-var VERSION = "0.1.0";
+var { RoonDisplay, LyricsStore } = require_lyrics();
+var VERSION = "0.2.0";
 function usage() {
   return [
     "roon-bridge: Roon sidecar for the DankMaterialShell Roon plugin",
     "",
     "  --state-dir <dir>      where roon-state.json (pairing token) and bridge.pid live",
+    "  --cache-dir <dir>      where lyric sidecars go (default $XDG_CACHE_HOME/DankMaterialShell/plugins/roon)",
+    "  --display-zone         host a Roon display so the core sends lyrics",
     "  --extension-id <id>    Roon extension id (default codes.noa.dms-roon)",
     "  --host <host>          connect directly instead of SOOD discovery",
     "  --port <port>          websocket port for --host (default 9330)",
@@ -24917,6 +25232,8 @@ __name(usage, "usage");
 function parseArgs(argv) {
   const out = {
     stateDir: "",
+    cacheDir: "",
+    displayZone: false,
     extensionId: "codes.noa.dms-roon",
     displayName: "DMS Roon",
     displayVersion: VERSION,
@@ -24934,6 +25251,12 @@ function parseArgs(argv) {
     switch (a) {
       case "--state-dir":
         out.stateDir = next();
+        break;
+      case "--cache-dir":
+        out.cacheDir = next();
+        break;
+      case "--display-zone":
+        out.displayZone = true;
         break;
       case "--extension-id":
         out.extensionId = next();
@@ -24969,6 +25292,10 @@ function parseArgs(argv) {
   if (!out.stateDir) {
     const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
     out.stateDir = path.join(base, "DankMaterialShell", "plugins", "roon");
+  }
+  if (!out.cacheDir) {
+    const base = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+    out.cacheDir = path.join(base, "DankMaterialShell", "plugins", "roon");
   }
   return out;
 }
@@ -25010,7 +25337,9 @@ function main() {
   fs.writeFileSync(pidFile, String(process.pid));
   const bridge = new RoonBridge({ ...opts, log });
   const browse = new BrowseSessions(bridge);
-  const mpris = new MprisBridge(bridge, log);
+  const lyrics = new LyricsStore(opts.cacheDir, log);
+  const mpris = new MprisBridge(bridge, log, lyrics);
+  const display = opts.displayZone ? new RoonDisplay({ stateDir: opts.stateDir, log }) : null;
   let mprisWanted = false;
   let queueWanted = false;
   let queueMax = 50;
@@ -25029,7 +25358,48 @@ function main() {
     mpris.onSeek(s.zoneId, s.position);
   });
   bridge.on("queue", (q) => proto.send({ type: "queue", ...q }));
+  const onLyrics = /* @__PURE__ */ __name((l) => {
+    if (!lyrics.set(l.zoneId, l.key, l.lrc, l.track)) return;
+    const entry = lyrics.get(l.zoneId);
+    proto.send({ type: "lyrics", zoneId: l.zoneId, lrc: entry ? entry.lrc : "" });
+    if (l.zoneId === bridge.selectedZoneId) mpris.update();
+  }, "onLyrics");
+  const waveforms = /* @__PURE__ */ new Map();
+  const unsynced = /* @__PURE__ */ new Set();
+  const onUnsynced = /* @__PURE__ */ __name((l) => {
+    const has = !!l.key && !(l.lrc && l.lrc.trim());
+    if (has === unsynced.has(l.zoneId)) return;
+    if (has) unsynced.add(l.zoneId);
+    else unsynced.delete(l.zoneId);
+    proto.send({ type: "lyrics_unsynced", zoneId: l.zoneId, value: has });
+  }, "onUnsynced");
+  const clearLyrics = /* @__PURE__ */ __name(() => {
+    for (const zoneId of lyrics.zones()) onLyrics({ zoneId, key: null, lrc: "", track: "" });
+    for (const zoneId of waveforms.keys()) proto.send({ type: "waveform", zoneId, waveform: [] });
+    waveforms.clear();
+    for (const zoneId of unsynced) proto.send({ type: "lyrics_unsynced", zoneId, value: false });
+    unsynced.clear();
+  }, "clearLyrics");
+  if (display) {
+    display.on("waveform", (w) => {
+      const key = w.waveform ? w.waveform.join(",") : "";
+      if ((waveforms.get(w.zoneId) || "") === key) return;
+      if (key) waveforms.set(w.zoneId, key);
+      else waveforms.delete(w.zoneId);
+      proto.send({ type: "waveform", zoneId: w.zoneId, waveform: w.waveform || [] });
+    });
+    display.on("lyrics", (l) => {
+      onLyrics(l);
+      onUnsynced(l);
+    });
+    display.on("cleared", clearLyrics);
+    bridge.on("selected", (zoneId) => display.follow(zoneId));
+  }
   bridge.on("paired", () => {
+    if (display) {
+      display.follow(bridge.selectedZoneId);
+      display.start(bridge.status.host, bridge.status.httpPort);
+    }
     if (mprisWanted && bridge.selectedZoneId) {
       mpris.enable();
       proto.send({ type: "mpris", active: mpris.active, busName: "org.mpris.MediaPlayer2.roon" });
@@ -25038,6 +25408,8 @@ function main() {
   });
   bridge.on("unpaired", () => {
     browse.sessions.clear();
+    if (display) display.stop();
+    clearLyrics();
     if (mpris.active) {
       mpris.disable();
       proto.send({ type: "mpris", active: false, busName: "org.mpris.MediaPlayer2.roon" });
@@ -25099,6 +25471,11 @@ function main() {
     }, "forget_core"),
     status: /* @__PURE__ */ __name(() => ({ ...bridge.status, selectedZoneId: bridge.selectedZoneId, mpris: mpris.active }), "status"),
     zones: /* @__PURE__ */ __name(() => ({ zones: bridge.normalizedZones() }), "zones"),
+    lyrics: /* @__PURE__ */ __name((m) => {
+      const zoneId = m.zoneId || bridge.selectedZoneId;
+      const entry = lyrics.current(zoneId, bridge.zones.get(zoneId));
+      return { lrc: entry ? entry.lrc : "", displayZone: opts.displayZone };
+    }, "lyrics"),
     shutdown: /* @__PURE__ */ __name(() => {
       shutdown(0);
     }, "shutdown")
@@ -25139,6 +25516,7 @@ function main() {
     shuttingDown = true;
     try {
       mpris.disable();
+      if (display) display.stop();
       bridge.stop();
     } catch {
     }

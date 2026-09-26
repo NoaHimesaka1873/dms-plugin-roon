@@ -2,23 +2,91 @@
     "id": "roon",
     "name": "Roon",
     "description": "Roon zone control, library search, desktop now-playing and an MPRIS bridge",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "author": "Noa Himesaka",
     "license": "MIT",
     "icon": "album",
     "type": "composite",
-    "capabilities": ["daemon", "dankbar-widget", "control-center", "desktop-widget", "launcher"],
+    "capabilities": [
+        "daemon",
+        "dankbar-widget",
+        "control-center",
+        "desktop-widget",
+        "launcher",
+        "dash-tab",
+        "dash-card"
+    ],
     "components": {
         "daemon": "./RoonDaemon.qml",
         "widget": "./RoonBarWidget.qml",
         "desktop": "./RoonDesktop.qml",
-        "launcher": "./RoonLauncher.qml"
+        "launcher": "./RoonLauncher.qml",
+        "dash": "./RoonTab.qml",
+        "dashCard": "./RoonCard.qml"
     },
     "trigger": "roon",
     "viewMode": "list",
+    "dash": {
+        "title": "Roon",
+        "card": {
+            "title": "Roon",
+            "w": 2,
+            "h": 2,
+            "minW": 1,
+            "minH": 1,
+            "maxW": 4,
+            "maxH": 3
+        },
+        "options": [
+            {
+                "key": "showArt",
+                "text": "Album art",
+                "type": "toggle",
+                "def": true,
+                "description": "Show the cover on the overview card when it has room"
+            },
+            {
+                "key": "showProgress",
+                "text": "Progress bar",
+                "type": "toggle",
+                "def": true
+            },
+            {
+                "key": "tone",
+                "text": "Card color",
+                "type": "choice",
+                "def": "",
+                "choices": [
+                    {
+                        "value": "",
+                        "text": "Surface"
+                    },
+                    {
+                        "value": "primary",
+                        "text": "Primary"
+                    },
+                    {
+                        "value": "secondary",
+                        "text": "Secondary"
+                    },
+                    {
+                        "value": "tertiary",
+                        "text": "Tertiary"
+                    }
+                ]
+            }
+        ]
+    },
     "settings": "./RoonSettings.qml",
     "startupCheck": "./StartupCheck.qml",
-    "dependencies": ["node"],
-    "requires_dms": ">=1.5.0",
-    "permissions": ["settings_read", "settings_write", "process", "network"]
+    "dependencies": [
+        "node"
+    ],
+    "requires_dms": ">=1.7.0",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process",
+        "network"
+    ]
 }

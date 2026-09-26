@@ -8,14 +8,17 @@ const { createProtocol } = require("./protocol");
 const { RoonBridge } = require("./roon");
 const { BrowseSessions } = require("./browse");
 const { MprisBridge } = require("./mpris");
+const { RoonDisplay, LyricsStore } = require("./lyrics");
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 function usage() {
   return [
     "roon-bridge: Roon sidecar for the DankMaterialShell Roon plugin",
     "",
     "  --state-dir <dir>      where roon-state.json (pairing token) and bridge.pid live",
+    "  --cache-dir <dir>      where lyric sidecars go (default $XDG_CACHE_HOME/DankMaterialShell/plugins/roon)",
+    "  --display-zone         host a Roon display so the core sends lyrics",
     "  --extension-id <id>    Roon extension id (default codes.noa.dms-roon)",
     "  --host <host>          connect directly instead of SOOD discovery",
     "  --port <port>          websocket port for --host (default 9330)",
@@ -29,6 +32,8 @@ function usage() {
 function parseArgs(argv) {
   const out = {
     stateDir: "",
+    cacheDir: "",
+    displayZone: false,
     extensionId: "codes.noa.dms-roon",
     displayName: "DMS Roon",
     displayVersion: VERSION,
@@ -46,6 +51,12 @@ function parseArgs(argv) {
     switch (a) {
       case "--state-dir":
         out.stateDir = next();
+        break;
+      case "--cache-dir":
+        out.cacheDir = next();
+        break;
+      case "--display-zone":
+        out.displayZone = true;
         break;
       case "--extension-id":
         out.extensionId = next();
@@ -81,6 +92,10 @@ function parseArgs(argv) {
   if (!out.stateDir) {
     const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
     out.stateDir = path.join(base, "DankMaterialShell", "plugins", "roon");
+  }
+  if (!out.cacheDir) {
+    const base = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+    out.cacheDir = path.join(base, "DankMaterialShell", "plugins", "roon");
   }
   return out;
 }
@@ -126,7 +141,9 @@ function main() {
 
   const bridge = new RoonBridge({ ...opts, log });
   const browse = new BrowseSessions(bridge);
-  const mpris = new MprisBridge(bridge, log);
+  const lyrics = new LyricsStore(opts.cacheDir, log);
+  const mpris = new MprisBridge(bridge, log, lyrics);
+  const display = opts.displayZone ? new RoonDisplay({ stateDir: opts.stateDir, log }) : null;
   let mprisWanted = false;
   let queueWanted = false;
   let queueMax = 50;
@@ -147,7 +164,49 @@ function main() {
     mpris.onSeek(s.zoneId, s.position);
   });
   bridge.on("queue", (q) => proto.send({ type: "queue", ...q }));
+  const onLyrics = (l) => {
+    if (!lyrics.set(l.zoneId, l.key, l.lrc, l.track)) return;
+    const entry = lyrics.get(l.zoneId);
+    proto.send({ type: "lyrics", zoneId: l.zoneId, lrc: entry ? entry.lrc : "" });
+    if (l.zoneId === bridge.selectedZoneId) mpris.update();
+  };
+  const waveforms = new Map();
+  // Zones where Roon has lyrics (a key) but no LRC: unsynced text Roon keeps to its own app.
+  const unsynced = new Set();
+  const onUnsynced = (l) => {
+    const has = !!l.key && !(l.lrc && l.lrc.trim());
+    if (has === unsynced.has(l.zoneId)) return;
+    if (has) unsynced.add(l.zoneId);
+    else unsynced.delete(l.zoneId);
+    proto.send({ type: "lyrics_unsynced", zoneId: l.zoneId, value: has });
+  };
+  const clearLyrics = () => {
+    for (const zoneId of lyrics.zones()) onLyrics({ zoneId, key: null, lrc: "", track: "" });
+    for (const zoneId of waveforms.keys()) proto.send({ type: "waveform", zoneId, waveform: [] });
+    waveforms.clear();
+    for (const zoneId of unsynced) proto.send({ type: "lyrics_unsynced", zoneId, value: false });
+    unsynced.clear();
+  };
+  if (display) {
+    display.on("waveform", (w) => {
+      const key = w.waveform ? w.waveform.join(",") : "";
+      if ((waveforms.get(w.zoneId) || "") === key) return;
+      if (key) waveforms.set(w.zoneId, key);
+      else waveforms.delete(w.zoneId);
+      proto.send({ type: "waveform", zoneId: w.zoneId, waveform: w.waveform || [] });
+    });
+    display.on("lyrics", (l) => {
+      onLyrics(l);
+      onUnsynced(l);
+    });
+    display.on("cleared", clearLyrics);
+    bridge.on("selected", (zoneId) => display.follow(zoneId));
+  }
   bridge.on("paired", () => {
+    if (display) {
+      display.follow(bridge.selectedZoneId);
+      display.start(bridge.status.host, bridge.status.httpPort);
+    }
     if (mprisWanted && bridge.selectedZoneId) {
       mpris.enable();
       proto.send({ type: "mpris", active: mpris.active, busName: "org.mpris.MediaPlayer2.roon" });
@@ -156,6 +215,8 @@ function main() {
   });
   bridge.on("unpaired", () => {
     browse.sessions.clear();
+    if (display) display.stop();
+    clearLyrics();
     if (mpris.active) {
       mpris.disable();
       proto.send({ type: "mpris", active: false, busName: "org.mpris.MediaPlayer2.roon" });
@@ -218,6 +279,11 @@ function main() {
     },
     status: () => ({ ...bridge.status, selectedZoneId: bridge.selectedZoneId, mpris: mpris.active }),
     zones: () => ({ zones: bridge.normalizedZones() }),
+    lyrics: (m) => {
+      const zoneId = m.zoneId || bridge.selectedZoneId;
+      const entry = lyrics.current(zoneId, bridge.zones.get(zoneId));
+      return { lrc: entry ? entry.lrc : "", displayZone: opts.displayZone };
+    },
     shutdown: () => {
       shutdown(0);
     },
@@ -259,6 +325,7 @@ function main() {
     shuttingDown = true;
     try {
       mpris.disable();
+      if (display) display.stop();
       bridge.stop();
     } catch {
       /* best effort */

@@ -45,6 +45,19 @@ PluginComponent {
     readonly property string pillIcon: pluginData.pillIcon ?? "logo"
     readonly property bool showArt: pillIcon !== "none"
     readonly property bool showWhenIdle: pluginData.pillShowWhenIdle ?? false
+    // Shrink to the title when it is shorter than the size cap. DMS 1.7 moved
+    // the media widget's global switch into its own per-widget options, so the
+    // plugin keeps its own (variant config first, then the plugin setting).
+    readonly property bool adaptiveWidth: {
+        if (variantData && variantData.adaptiveWidth !== undefined)
+            return !!variantData.adaptiveWidth;
+        return pluginData.pillAdaptiveWidth ?? true;
+    }
+    readonly property string scrollMode: pluginData.pillScrollMode ?? "volume"
+    // "popout" or "dash": where a click on the pill goes.
+    readonly property string clickOpens: pluginData.pillClickOpens ?? "popout"
+
+    pillClickAction: clickOpens === "dash" ? ((x, y, width, section, screen) => popoutService?.toggleDankDash("plugin_" + pluginId, x, y, width, section, screen)) : null
     readonly property int maxTextWidth: [0, 120, 180, 240][Math.max(0, Math.min(3, pillSize))]
     readonly property bool active: RoonService.paired && (RoonService.hasTrack || showWhenIdle)
     readonly property bool pillVisible: active || showWhenIdle
@@ -70,7 +83,7 @@ PluginComponent {
     }
 
     function handleWheel(wheelEvent) {
-        const mode = SettingsData.audioScrollMode;
+        const mode = root.scrollMode;
         if (mode === "nothing")
             return;
         wheelEvent.accepted = true;
@@ -172,7 +185,7 @@ PluginComponent {
             readonly property real textWidth: {
                 if (!root.pillVisible || root.maxTextWidth <= 0 || root.pillText.length === 0)
                     return 0;
-                if (!SettingsData.mediaAdaptiveWidthEnabled)
+                if (!root.adaptiveWidth)
                     return root.maxTextWidth;
                 const raw = pillLabel.implicitTextWidth;
                 return Math.min(root.maxTextWidth, Math.ceil(raw));
@@ -281,7 +294,7 @@ PluginComponent {
                         Timer {
                             interval: 40
                             repeat: true
-                            running: pillLabel.scrolling
+                            running: pillLabel.scrolling && root.surfaceLive
                             onTriggered: {
                                 if (pillLabel.holdMs > 0) {
                                     pillLabel.holdMs -= interval;
