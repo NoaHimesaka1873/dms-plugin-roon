@@ -174,7 +174,6 @@ DashTabComponent {
                 textColor: lyricsCard.contentColor
                 mutedColor: lyricsCard.mutedColor
                 accentColor: lyricsCard.accentColor
-                fontSize: lyricsCard.width >= DashMetrics.gridRowUnit * 3 ? Theme.fontSizeLarge : Theme.fontSizeMedium
             }
         }
     }

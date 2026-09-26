@@ -137,7 +137,7 @@ QtObject {
             items.push({
                 name: (z.zoneId === RoonService.selectedZoneId ? "● " : "") + z.name,
                 icon: "material:speaker",
-                comment: z.nowPlaying ? z.state + " • " + z.nowPlaying.title + " — " + RoonService.formatArtists(z.nowPlaying.artist) : z.state,
+                comment: z.nowPlaying ? z.state + " • " + z.nowPlaying.title + " • " + RoonService.formatArtists(z.nowPlaying.artist) : z.state,
                 action: "roon-zone:" + z.zoneId,
                 categories: ["Zones"],
                 _preScored: 900 - i

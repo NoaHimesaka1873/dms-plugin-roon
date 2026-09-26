@@ -72,6 +72,7 @@ Singleton {
     readonly property color accent: artAccent ? MediaAccentService.accent : Theme.primary
     readonly property color accentContainer: artAccent ? MediaAccentService.accentContainer : Theme.primaryContainer
     readonly property color onAccentContainer: artAccent ? MediaAccentService.onAccentContainer : Theme.onPrimaryContainer
+    readonly property color lyricsAccent: artAccent && MediaAccentService.lyricsAccents.length > 0 ? MediaAccentService.lyricsAccents[0] : Theme.primary
     // "flat" | "wavy" | "spectrum" (Roon's waveform)
     readonly property string seekStyle: String(setting("seekStyle", "spectrum"))
     readonly property bool lyricsDisplayEnabled: !!setting("lyricsDisplayZone", true)
@@ -533,9 +534,10 @@ Singleton {
         const np = nowPlaying;
         const key = np ? (np.imageKey + "|" + np.title + "|" + np.artist) : "";
         if (np) {
-            _seekBase = Number(np.position) || 0;
-            _seekAt = Date.now();
-            position = _seekBase;
+            if (key === _trackKey)
+                _reanchor(np.position);
+            else
+                _applySeek(np.position);
         } else {
             _seekBase = 0;
             _seekAt = 0;
@@ -545,6 +547,17 @@ Singleton {
             _trackKey = key;
             trackChanged();
         }
+    }
+
+    // Seek reports arrive right as Roon's whole-second position ticks, so they
+    // anchor the clock. Zone updates (volume, state, ...) carry the same whole
+    // second but land mid-second; re-anchoring on those pulls the clock back
+    // by up to a second, so keep it unless they really disagree.
+    function _reanchor(pos) {
+        const reported = Number(pos) || 0;
+        if (isPlaying && _seekAt > 0 && Math.abs(currentPosition() - reported) < 1.5)
+            return;
+        _applySeek(reported);
     }
 
     function _applySeek(pos) {
@@ -612,8 +625,10 @@ Singleton {
     function seek(seconds) {
         if (!selectedZoneId)
             return;
-        _applySeek(seconds);
-        command({ type: "seek", zoneId: selectedZoneId, how: "absolute", seconds: Math.round(seconds) }, "seek");
+        // Roon seeks to whole seconds; round up so a lyric line's own time is reached.
+        const target = Math.ceil(seconds);
+        _applySeek(target);
+        command({ type: "seek", zoneId: selectedZoneId, how: "absolute", seconds: target }, "seek");
     }
 
     function seekRelative(delta) {

@@ -38,11 +38,11 @@ PluginSettings {
             if (s === "paired")
                 return "Connected to " + RoonService.coreName + " (" + RoonService.coreHost + ":" + RoonService.coreHttpPort + ")";
             if (s === "unauthorized")
-                return "Found " + RoonService.coreName + " — enable \"DMS Roon\" in Roon → Settings → Extensions";
+                return "Found " + RoonService.coreName + ". Enable \"DMS Roon\" in Roon → Settings → Extensions.";
             if (s === "discovering")
                 return "Looking for Roon Server…";
             if (RoonService.bridgeState === "crashed")
-                return "Bridge crashed — check the shell log";
+                return "Bridge crashed. Check the shell log.";
             return "Disconnected";
         }
         font.pixelSize: Theme.fontSizeSmall
