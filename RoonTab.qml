@@ -167,13 +167,12 @@ DashTabComponent {
         Card {
             id: lyricsCard
             property bool live: false
+            pad: 0
 
-            LyricsView {
+            RoonLyrics {
                 anchors.fill: parent
                 live: lyricsCard.live
-                textColor: lyricsCard.contentColor
-                mutedColor: lyricsCard.mutedColor
-                accentColor: lyricsCard.accentColor
+                radius: lyricsCard.radius
             }
         }
     }

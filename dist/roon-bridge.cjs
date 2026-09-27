@@ -5678,6 +5678,11 @@ var require_roon = __commonJS({
         return `http://${this.status.host}:${this.status.httpPort}/api/image/${encodeURIComponent(imageKey)}?scale=fit&width=${s}&height=${s}&format=image/jpeg`;
       }
       normalizeZone(z) {
+        const zone = this._normalizeZone(z);
+        if (zone.nowPlaying && this.decorateNowPlaying) this.decorateNowPlaying(z, zone.nowPlaying);
+        return zone;
+      }
+      _normalizeZone(z) {
         const np = z.now_playing || null;
         const three = np && np.three_line || {};
         const two = np && np.two_line || {};
@@ -24866,11 +24871,9 @@ var require_mpris = __commonJS({
           };
           const art = this.bridge.artUrl(np.imageKey, 600);
           if (art) meta["mpris:artUrl"] = art;
-          const lyrics = this.lyrics ? this.lyrics.current(z.zoneId, raw) : null;
-          const url = lyrics ? this.lyrics.trackUrl(lyrics, np) : "";
-          if (url) {
-            meta["xesam:url"] = url;
-            meta["xesam:asText"] = this.lyrics.plainText(lyrics);
+          if (np.lyricsUrl) {
+            meta["xesam:url"] = np.lyricsUrl;
+            meta["xesam:asText"] = this.lyrics ? this.lyrics.plainText(this.lyrics.current(z.zoneId, raw)) : "";
           }
           if (trackId !== this._lastTrackId) {
             this._lastTrackId = trackId;
@@ -25372,10 +25375,16 @@ function main() {
     mpris.onSeek(s.zoneId, s.position);
   });
   bridge.on("queue", (q) => proto.send({ type: "queue", ...q }));
+  bridge.decorateNowPlaying = (raw, np) => {
+    const entry = lyrics.current(raw.zone_id, raw);
+    np.lyricsUrl = entry ? lyrics.trackUrl(entry, np) : "";
+  };
   const onLyrics = /* @__PURE__ */ __name((l) => {
     if (!lyrics.set(l.zoneId, l.key, l.lrc, l.track)) return;
     const entry = lyrics.get(l.zoneId);
     proto.send({ type: "lyrics", zoneId: l.zoneId, lrc: entry ? entry.lrc : "" });
+    const raw = bridge.zones.get(l.zoneId);
+    if (raw) proto.send({ type: "zone_changed", zone: bridge.normalizeZone(raw) });
     if (l.zoneId === bridge.selectedZoneId) mpris.update();
   }, "onLyrics");
   const waveforms = /* @__PURE__ */ new Map();

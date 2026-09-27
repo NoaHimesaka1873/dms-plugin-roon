@@ -48,22 +48,12 @@ Singleton {
     // Lyrics Roon pushed per zone (LRC text), via the web display connection.
     property var lyricsByZone: ({})
     readonly property string lyrics: lyricsByZone[selectedZoneId] ?? ""
-    // Roon only pushes synced lyrics; for anything else (unsynced, or the
-    // Roon display turned off) lyrics views fall back to DMS's own lookup,
-    // the one the dash Media tab uses.
-    property var fallbackLyrics: null   // { key, lines, source }
     // Roon has lyrics for the track but only unsynced ones, which it doesn't send out.
     property var lyricsUnsyncedByZone: ({})
     readonly property bool roonUnsyncedOnly: !!lyricsUnsyncedByZone[selectedZoneId]
-    property int _lyricsUsers: 0
-    readonly property string _lyricsTrackKey: hasTrack ? [selectedZoneId, title, rawArtist, album, length].join("\u0001") : ""
-    readonly property bool lyricsFromFallback: !lyrics && fallbackLyrics !== null && fallbackLyrics.key === _lyricsTrackKey && fallbackLyrics.lines.length > 0
-    readonly property string lyricsSource: lyrics ? "Roon" : (lyricsFromFallback ? fallbackLyrics.source : "")
-    readonly property bool lyricsLoading: !lyrics && !lyricsFromFallback && hasTrack && (lyricsFallbackTimer.running || _lyricsRequestKey !== "")
-    property string _lyricsRequestKey: ""
-    // [{ time, text }] sorted by time; time is -1 for unsynced lyrics.
-    readonly property var lyricLines: lyrics ? parseLrc(lyrics) : (lyricsFromFallback ? fallbackLyrics.lines : [])
-    readonly property bool lyricsSynced: lyricLines.length > 0 && lyricLines[0].time >= 0
+    // file:// url of the .lrc sidecar the bridge wrote for this track; DMS's
+    // lyrics engine reads it before asking any online provider.
+    readonly property string lyricsUrl: nowPlaying?.lyricsUrl ?? ""
     // Roon's loudness outline for the track (0..1 per slice), same source as lyrics.
     property var waveformByZone: ({})
     readonly property var waveform: waveformByZone[selectedZoneId] ?? []
@@ -72,7 +62,6 @@ Singleton {
     readonly property color accent: artAccent ? MediaAccentService.accent : Theme.primary
     readonly property color accentContainer: artAccent ? MediaAccentService.accentContainer : Theme.primaryContainer
     readonly property color onAccentContainer: artAccent ? MediaAccentService.onAccentContainer : Theme.onPrimaryContainer
-    readonly property color lyricsAccent: artAccent && MediaAccentService.lyricsAccents.length > 0 ? MediaAccentService.lyricsAccents[0] : Theme.primary
     // "flat" | "wavy" | "spectrum" (Roon's waveform)
     readonly property string seekStyle: String(setting("seekStyle", "spectrum"))
     readonly property bool lyricsDisplayEnabled: !!setting("lyricsDisplayZone", true)
@@ -909,93 +898,6 @@ Singleton {
         const cmd = String(setting("roonAppCommand", "") || defaultAppCommand);
         Quickshell.execDetached(["sh", "-c", cmd]);
         return false;
-    }
-
-    function parseLrc(text) {
-        if (!text)
-            return [];
-        const synced = [];
-        const plain = [];
-        for (const raw of String(text).split("\n")) {
-            const stamps = [];
-            let rest = raw;
-            let m;
-            while ((m = /^\s*\[(\d+):(\d+(?:[.:]\d+)?)\]/.exec(rest)) !== null) {
-                stamps.push(Number(m[1]) * 60 + Number(m[2].replace(":", ".")));
-                rest = rest.substring(m[0].length);
-            }
-            const line = rest.replace(/<\d+:\d+(?:[.:]\d+)?>/g, "").trim();
-            if (stamps.length === 0) {
-                if (!/^\s*\[[a-z]+:.*\]\s*$/i.test(raw) && line)
-                    plain.push({ time: -1, text: line });
-                continue;
-            }
-            for (const t of stamps)
-                synced.push({ time: t, text: line });
-        }
-        if (synced.length > 0)
-            return synced.sort((a, b) => a.time - b.time);
-        return plain;
-    }
-
-    function acquireLyrics() {
-        _lyricsUsers += 1;
-        lyricsFallbackTimer.restart();
-    }
-
-    function releaseLyrics() {
-        _lyricsUsers = Math.max(0, _lyricsUsers - 1);
-    }
-
-    on_LyricsTrackKeyChanged: lyricsFallbackTimer.restart()
-    onLyricsChanged: lyricsFallbackTimer.restart()
-
-    // Give Roon a moment to push its LRC (it follows the track change within
-    // milliseconds) before asking DMS.
-    Timer {
-        id: lyricsFallbackTimer
-        interval: 1200
-        onTriggered: root._fetchFallbackLyrics()
-    }
-
-    function _fetchFallbackLyrics() {
-        const key = _lyricsTrackKey;
-        if (lyrics || !key || _lyricsUsers === 0 || _lyricsRequestKey === key || (fallbackLyrics && fallbackLyrics.key === key))
-            return;
-        if (!DMSService.isConnected)
-            return;
-        _lyricsRequestKey = key;
-        const providers = MediaOptions.enabledLyricsProviders;
-        DMSService.sendRequest("lyrics.get", {
-            "title": title,
-            "artist": rawArtist.split(" / ")[0],
-            "album": album,
-            "duration": length,
-            "fileUrl": "",
-            "allowNetwork": providers.length > 0,
-            "providers": providers
-        }, response => {
-            if (root._lyricsRequestKey === key)
-                root._lyricsRequestKey = "";
-            const r = response && !response.error ? response.result : null;
-            let lines = [];
-            if (r && r.found && !r.instrumental) {
-                lines = (r.synced || []).filter(l => Number.isFinite(l.t) && typeof l.x === "string").map(l => ({
-                            time: l.t,
-                            text: l.x
-                        }));
-                if (lines.length === 0)
-                    lines = String(r.plain || "").split("\n").map(t => t.trim()).filter(t => t.length > 0).map(t => ({
-                                time: -1,
-                                text: t
-                            }));
-            }
-            root.fallbackLyrics = {
-                key: key,
-                lines: lines,
-                source: r && r.attribution && r.attribution.name ? r.attribution.name : ""
-            };
-        });
     }
 
     // Playback position right now, interpolated from the last seek report.

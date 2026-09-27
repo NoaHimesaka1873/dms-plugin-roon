@@ -164,10 +164,18 @@ function main() {
     mpris.onSeek(s.zoneId, s.position);
   });
   bridge.on("queue", (q) => proto.send({ type: "queue", ...q }));
+  // Every zone's now playing carries the .lrc sidecar url while Roon's lyrics
+  // match its track; DMS's lyrics engine reads the sidecar before any provider.
+  bridge.decorateNowPlaying = (raw, np) => {
+    const entry = lyrics.current(raw.zone_id, raw);
+    np.lyricsUrl = entry ? lyrics.trackUrl(entry, np) : "";
+  };
   const onLyrics = (l) => {
     if (!lyrics.set(l.zoneId, l.key, l.lrc, l.track)) return;
     const entry = lyrics.get(l.zoneId);
     proto.send({ type: "lyrics", zoneId: l.zoneId, lrc: entry ? entry.lrc : "" });
+    const raw = bridge.zones.get(l.zoneId);
+    if (raw) proto.send({ type: "zone_changed", zone: bridge.normalizeZone(raw) });
     if (l.zoneId === bridge.selectedZoneId) mpris.update();
   };
   const waveforms = new Map();

@@ -135,9 +135,8 @@ PluginComponent {
                 position: Math.round(RoonService.position),
                 length: RoonService.length,
                 mpris: RoonService.mprisActive,
-                lyrics: RoonService.lyricsSource,
-                lyricLines: RoonService.lyricLines.length,
-                lyricsSynced: RoonService.lyricsSynced,
+                lyricsFromRoon: RoonService.lyrics !== "",
+                lyricsUrl: RoonService.lyricsUrl,
                 roonUnsyncedOnly: RoonService.roonUnsyncedOnly
             });
         }

@@ -260,6 +260,13 @@ class RoonBridge extends EventEmitter {
   }
 
   normalizeZone(z) {
+    const zone = this._normalizeZone(z);
+    // index.js hooks in here to attach the lyrics sidecar url (nowPlaying.lyricsUrl).
+    if (zone.nowPlaying && this.decorateNowPlaying) this.decorateNowPlaying(z, zone.nowPlaying);
+    return zone;
+  }
+
+  _normalizeZone(z) {
     const np = z.now_playing || null;
     const three = (np && np.three_line) || {};
     const two = (np && np.two_line) || {};

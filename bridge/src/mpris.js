@@ -168,11 +168,9 @@ class MprisBridge {
       const art = this.bridge.artUrl(np.imageKey, 600);
       if (art) meta["mpris:artUrl"] = art;
       // Roon's lyrics reach the DMS lyrics view as an .lrc sidecar of xesam:url.
-      const lyrics = this.lyrics ? this.lyrics.current(z.zoneId, raw) : null;
-      const url = lyrics ? this.lyrics.trackUrl(lyrics, np) : "";
-      if (url) {
-        meta["xesam:url"] = url;
-        meta["xesam:asText"] = this.lyrics.plainText(lyrics);
+      if (np.lyricsUrl) {
+        meta["xesam:url"] = np.lyricsUrl;
+        meta["xesam:asText"] = this.lyrics ? this.lyrics.plainText(this.lyrics.current(z.zoneId, raw)) : "";
       }
       if (trackId !== this._lastTrackId) {
         this._lastTrackId = trackId;
