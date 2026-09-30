@@ -77,6 +77,12 @@
             }
         ]
     },
+    "lyrics": {
+        "command": "./lyrics-provider.js",
+        "name": "Roon",
+        "url": "https://roon.app",
+        "wordSync": false
+    },
     "settings": "./RoonSettings.qml",
     "startupCheck": "./StartupCheck.qml",
     "dependencies": [

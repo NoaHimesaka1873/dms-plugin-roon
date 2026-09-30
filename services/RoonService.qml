@@ -51,9 +51,6 @@ Singleton {
     // Roon has lyrics for the track but only unsynced ones, which it doesn't send out.
     property var lyricsUnsyncedByZone: ({})
     readonly property bool roonUnsyncedOnly: !!lyricsUnsyncedByZone[selectedZoneId]
-    // file:// url of the .lrc sidecar the bridge wrote for this track; DMS's
-    // lyrics engine reads it before asking any online provider.
-    readonly property string lyricsUrl: nowPlaying?.lyricsUrl ?? ""
     // Roon's loudness outline for the track (0..1 per slice), same source as lyrics.
     property var waveformByZone: ({})
     readonly property var waveform: waveformByZone[selectedZoneId] ?? []

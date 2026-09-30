@@ -136,7 +136,6 @@ PluginComponent {
                 length: RoonService.length,
                 mpris: RoonService.mprisActive,
                 lyricsFromRoon: RoonService.lyrics !== "",
-                lyricsUrl: RoonService.lyricsUrl,
                 roonUnsyncedOnly: RoonService.roonUnsyncedOnly
             });
         }

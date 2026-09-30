@@ -6,9 +6,9 @@ import qs.Modules.DankDash.Media
 import "../services"
 
 // Lyrics for the selected zone, through DMS's own lyrics engine and view
-// (LyricsController + LyricsOverlay, DMS 1.7). The controller gets the .lrc
-// sidecar the bridge wrote from Roon's lyrics as its file url, so the core
-// reads Roon's lyrics first and falls back to the user's enabled providers.
+// (LyricsController + LyricsOverlay, DMS 1.7), from the user's enabled lyrics
+// providers in their order. Roon's own lyrics are one of them: the plugin's
+// "Roon" provider (lyrics-provider.js).
 Item {
     id: root
 
@@ -35,7 +35,6 @@ Item {
         player: roonClock
         playing: RoonService.isPlaying
         stopped: !RoonService.hasTrack || RoonService.state === "stopped"
-        url: RoonService.lyricsUrl
     }
 
     // Roon has only unsynced lyrics, which it keeps to its own app, and no

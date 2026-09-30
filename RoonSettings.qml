@@ -121,7 +121,7 @@ PluginSettings {
     ToggleSetting {
         settingKey: "lyricsDisplayZone"
         label: "Lyrics from Roon"
-        description: "Connects as a Roon web display (it shows up in Roon → Settings → Displays) so Roon sends the lyrics of what's playing. They show up in the dash Media tab through the MPRIS bridge, and in the Roon dash tab. Toggling restarts the bridge."
+        description: "Connects as a Roon web display (it shows up in Roon → Settings → Displays) so Roon sends the lyrics and waveform of what's playing. The lyrics come in as the \"Roon\" lyrics provider: switch it on and order it in Settings → Sound & media → Media player → Lyrics providers. Toggling restarts the bridge."
         defaultValue: true
     }
 

@@ -23,6 +23,15 @@ function trackSignature(rawZone) {
   return [np.image_key || "", three.line1 || one.line1 || "", three.line2 || ""].join("|");
 }
 
+// What the lyrics provider matches a DMS lookup against.
+function trackMeta(rawZone) {
+  const np = rawZone && rawZone.now_playing;
+  if (!np) return null;
+  const three = np.three_line || {};
+  const one = np.one_line || {};
+  return { title: three.line1 || one.line1 || "", artist: three.line2 || "", album: three.line3 || "", length: np.length || 0 };
+}
+
 // Roon only sends lyrics to its web display, the page at :9330/display/. This
 // is a second connection that registers exactly like that page does (same
 // extension id and registration, which the core trusts as a display without
@@ -32,7 +41,8 @@ function trackSignature(rawZone) {
 // zone's track changes.
 // The same subscription carries "WaveformChanged" ({zone_id, waveform}), the
 // loudness outline Roon draws as its seek bar.
-// Emits: lyrics ({zoneId, key, lrc, track}), waveform ({zoneId, waveform}), cleared.
+// Emits: lyrics ({zoneId, key, lrc, track, meta, pending}), waveform ({zoneId, waveform}), cleared.
+// pending marks the clear on a track change, before that track's LyricsChanged.
 class RoonDisplay extends EventEmitter {
   constructor({ stateDir, log }) {
     super();
@@ -47,6 +57,7 @@ class RoonDisplay extends EventEmitter {
     this.port = 0;
     this.moo = null;
     this.tracks = new Map();
+    this.meta = new Map();
     this._timer = null;
     this._stopped = true;
 
@@ -146,6 +157,7 @@ class RoonDisplay extends EventEmitter {
 
   _onPaired(core) {
     this.tracks.clear();
+    this.meta.clear();
     core.services.RoonApiTransport.subscribe_zones((resp, body) => {
       if (!body) return;
       if (resp === "Subscribed" || resp === "Changed") {
@@ -153,15 +165,17 @@ class RoonDisplay extends EventEmitter {
           const track = trackSignature(z);
           if (this.tracks.get(z.zone_id) === track) continue;
           this.tracks.set(z.zone_id, track);
+          this.meta.set(z.zone_id, trackMeta(z));
           // A new track drops the old lyrics and waveform; its own follow right after.
           if (resp === "Changed") {
-            this.emit("lyrics", { zoneId: z.zone_id, key: null, lrc: "", track });
+            this.emit("lyrics", { zoneId: z.zone_id, key: null, lrc: "", track, meta: this.meta.get(z.zone_id), pending: true });
             this.emit("waveform", { zoneId: z.zone_id, waveform: null });
           }
         }
         for (const id of body.zones_removed || []) {
           this.tracks.delete(id);
-          this.emit("lyrics", { zoneId: id, key: null, lrc: "", track: "" });
+          this.meta.delete(id);
+          this.emit("lyrics", { zoneId: id, key: null, lrc: "", track: "", meta: null });
           this.emit("waveform", { zoneId: id, waveform: null });
         }
         return;
@@ -178,6 +192,7 @@ class RoonDisplay extends EventEmitter {
         key: body.key == null ? null : String(body.key),
         lrc: body.lrc || "",
         track: this.tracks.get(body.zone_id) || "",
+        meta: this.meta.get(body.zone_id) || null,
       });
     });
   }
@@ -242,15 +257,17 @@ function segment(text, fallback) {
   return s;
 }
 
-// Lyrics per zone, written out as .lrc sidecars. DMS reads a sidecar next to
-// the MPRIS xesam:url before asking any network provider, and the audio file
-// itself doesn't have to exist, so the MPRIS track points at
-// <dir>/<Album>/<Artist> - <Title>.roon and the lyrics sit in the .lrc beside it.
+// Lyrics per zone for the plugin's DMS lyrics provider (lyrics-provider.js).
+// Each zone's lyrics go to <dir>/<Album>/<Artist> - <Title>.lrc, and
+// <dir>/state.json says what every zone is playing and whether Roon has
+// lyrics for it: pending (track just changed), lyrics, unsynced (Roon has only
+// unsynced lyrics, which it keeps to its own app) or none.
 class LyricsStore {
   constructor(cacheDir, log) {
     this.dir = path.join(cacheDir, "lyrics");
     this.log = log || (() => {});
     this.byZone = new Map();
+    this.state = new Map();
   }
 
   // Returns true when the zone's lyrics actually changed.
@@ -279,45 +296,65 @@ class LyricsStore {
     return entry;
   }
 
-  // file:// URL whose .lrc sibling holds these lyrics, or "" if writing failed.
-  trackUrl(entry, np) {
-    if (!entry || !np) return "";
-    const artist = String(np.artist || "").split(" / ").join(", ");
-    const name = segment(artist ? `${artist} - ${np.title}` : np.title, "Unknown Track");
-    const base = path.join(this.dir, segment(np.album, "Unknown Album"), name);
-    const lrcPath = base + ".lrc";
+  // Record a lyrics event for the provider and write state.json.
+  report(event) {
+    const { zoneId, meta } = event;
+    if (!meta) {
+      this.state.delete(zoneId);
+    } else {
+      let status = "none";
+      let lrcPath = "";
+      if (event.pending) status = "pending";
+      else if (event.lrc && event.lrc.trim()) {
+        lrcPath = this._write(meta, event.lrc);
+        status = lrcPath ? "lyrics" : "none";
+      } else if (event.key) status = "unsynced";
+      this.state.set(zoneId, { ...meta, status, lrcPath });
+    }
+    this.writeState();
+  }
+
+  clearState() {
+    this.state.clear();
+    this.writeState();
+  }
+
+  writeState() {
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+      const file = path.join(this.dir, "state.json");
+      fs.writeFileSync(file + ".tmp", JSON.stringify({ pid: process.pid, updated: Date.now(), zones: Object.fromEntries(this.state) }));
+      fs.renameSync(file + ".tmp", file);
+    } catch (e) {
+      this.log("warn", "lyrics state: " + e.message);
+    }
+  }
+
+  _write(meta, lrc) {
+    const artist = String(meta.artist || "").split(" / ").join(", ");
+    const name = segment(artist ? `${artist} - ${meta.title}` : meta.title, "Unknown Track");
+    const file = path.join(this.dir, segment(meta.album, "Unknown Album"), name + ".lrc");
     try {
       let existing = null;
       try {
-        existing = fs.readFileSync(lrcPath, "utf8");
+        existing = fs.readFileSync(file, "utf8");
       } catch {
         /* not written yet */
       }
-      if (existing !== entry.lrc) {
-        fs.mkdirSync(path.dirname(lrcPath), { recursive: true });
-        fs.writeFileSync(lrcPath + ".tmp", entry.lrc);
-        fs.renameSync(lrcPath + ".tmp", lrcPath);
+      if (existing !== lrc) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file + ".tmp", lrc);
+        fs.renameSync(file + ".tmp", file);
         this._prune();
       }
+      return file;
     } catch (e) {
       this.log("warn", "lyrics: " + e.message);
       return "";
     }
-    return "file://" + base.split(path.sep).map(encodeURIComponent).join("/") + ".roon";
   }
 
-  // Plain text for xesam:asText, timestamps stripped.
-  plainText(entry) {
-    if (!entry) return "";
-    return entry.lrc
-      .split("\n")
-      .filter((l) => !/^\[[a-z]+:.*\]\s*$/i.test(l.trim()))
-      .map((l) => l.replace(/\[\d+:\d+(?:[.:]\d+)?\]/g, "").replace(/<\d+:\d+(?:[.:]\d+)?>/g, "").trim())
-      .join("\n")
-      .trim();
-  }
-
-  // Keep the newest sidecars; lyrics are cheap to get again from Roon.
+  // Keep the newest .lrc files; lyrics are cheap to get again from Roon.
   _prune() {
     try {
       const files = [];

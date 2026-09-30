@@ -5678,11 +5678,6 @@ var require_roon = __commonJS({
         return `http://${this.status.host}:${this.status.httpPort}/api/image/${encodeURIComponent(imageKey)}?scale=fit&width=${s}&height=${s}&format=image/jpeg`;
       }
       normalizeZone(z) {
-        const zone = this._normalizeZone(z);
-        if (zone.nowPlaying && this.decorateNowPlaying) this.decorateNowPlaying(z, zone.nowPlaying);
-        return zone;
-      }
-      _normalizeZone(z) {
         const np = z.now_playing || null;
         const three = np && np.three_line || {};
         const two = np && np.two_line || {};
@@ -24723,9 +24718,8 @@ var require_mpris = __commonJS({
       static {
         __name(this, "MprisBridge");
       }
-      constructor(bridge, log, lyrics) {
+      constructor(bridge, log) {
         this.bridge = bridge;
-        this.lyrics = lyrics || null;
         this.log = log || (() => {
         });
         this.player = null;
@@ -24871,10 +24865,6 @@ var require_mpris = __commonJS({
           };
           const art = this.bridge.artUrl(np.imageKey, 600);
           if (art) meta["mpris:artUrl"] = art;
-          if (np.lyricsUrl) {
-            meta["xesam:url"] = np.lyricsUrl;
-            meta["xesam:asText"] = this.lyrics ? this.lyrics.plainText(this.lyrics.current(z.zoneId, raw)) : "";
-          }
           if (trackId !== this._lastTrackId) {
             this._lastTrackId = trackId;
             this._resyncSeeks = 3;
@@ -24938,6 +24928,14 @@ var require_lyrics = __commonJS({
       return [np.image_key || "", three.line1 || one.line1 || "", three.line2 || ""].join("|");
     }
     __name(trackSignature, "trackSignature");
+    function trackMeta(rawZone) {
+      const np = rawZone && rawZone.now_playing;
+      if (!np) return null;
+      const three = np.three_line || {};
+      const one = np.one_line || {};
+      return { title: three.line1 || one.line1 || "", artist: three.line2 || "", album: three.line3 || "", length: np.length || 0 };
+    }
+    __name(trackMeta, "trackMeta");
     var RoonDisplay2 = class extends EventEmitter {
       static {
         __name(this, "RoonDisplay");
@@ -24956,6 +24954,7 @@ var require_lyrics = __commonJS({
         this.port = 0;
         this.moo = null;
         this.tracks = /* @__PURE__ */ new Map();
+        this.meta = /* @__PURE__ */ new Map();
         this._timer = null;
         this._stopped = true;
         this.roon = new RoonApi({
@@ -25048,6 +25047,7 @@ var require_lyrics = __commonJS({
       }
       _onPaired(core) {
         this.tracks.clear();
+        this.meta.clear();
         core.services.RoonApiTransport.subscribe_zones((resp, body) => {
           if (!body) return;
           if (resp === "Subscribed" || resp === "Changed") {
@@ -25055,14 +25055,16 @@ var require_lyrics = __commonJS({
               const track = trackSignature(z);
               if (this.tracks.get(z.zone_id) === track) continue;
               this.tracks.set(z.zone_id, track);
+              this.meta.set(z.zone_id, trackMeta(z));
               if (resp === "Changed") {
-                this.emit("lyrics", { zoneId: z.zone_id, key: null, lrc: "", track });
+                this.emit("lyrics", { zoneId: z.zone_id, key: null, lrc: "", track, meta: this.meta.get(z.zone_id), pending: true });
                 this.emit("waveform", { zoneId: z.zone_id, waveform: null });
               }
             }
             for (const id of body.zones_removed || []) {
               this.tracks.delete(id);
-              this.emit("lyrics", { zoneId: id, key: null, lrc: "", track: "" });
+              this.meta.delete(id);
+              this.emit("lyrics", { zoneId: id, key: null, lrc: "", track: "", meta: null });
               this.emit("waveform", { zoneId: id, waveform: null });
             }
             return;
@@ -25077,7 +25079,8 @@ var require_lyrics = __commonJS({
             zoneId: body.zone_id,
             key: body.key == null ? null : String(body.key),
             lrc: body.lrc || "",
-            track: this.tracks.get(body.zone_id) || ""
+            track: this.tracks.get(body.zone_id) || "",
+            meta: this.meta.get(body.zone_id) || null
           });
         });
       }
@@ -25139,6 +25142,7 @@ var require_lyrics = __commonJS({
         this.log = log || (() => {
         });
         this.byZone = /* @__PURE__ */ new Map();
+        this.state = /* @__PURE__ */ new Map();
       }
       // Returns true when the zone's lyrics actually changed.
       set(zoneId, key, lrc, track) {
@@ -25162,37 +25166,60 @@ var require_lyrics = __commonJS({
         if (!entry || entry.track !== trackSignature(rawZone)) return null;
         return entry;
       }
-      // file:// URL whose .lrc sibling holds these lyrics, or "" if writing failed.
-      trackUrl(entry, np) {
-        if (!entry || !np) return "";
-        const artist = String(np.artist || "").split(" / ").join(", ");
-        const name = segment(artist ? `${artist} - ${np.title}` : np.title, "Unknown Track");
-        const base = path2.join(this.dir, segment(np.album, "Unknown Album"), name);
-        const lrcPath = base + ".lrc";
+      // Record a lyrics event for the provider and write state.json.
+      report(event) {
+        const { zoneId, meta } = event;
+        if (!meta) {
+          this.state.delete(zoneId);
+        } else {
+          let status = "none";
+          let lrcPath = "";
+          if (event.pending) status = "pending";
+          else if (event.lrc && event.lrc.trim()) {
+            lrcPath = this._write(meta, event.lrc);
+            status = lrcPath ? "lyrics" : "none";
+          } else if (event.key) status = "unsynced";
+          this.state.set(zoneId, { ...meta, status, lrcPath });
+        }
+        this.writeState();
+      }
+      clearState() {
+        this.state.clear();
+        this.writeState();
+      }
+      writeState() {
+        try {
+          fs2.mkdirSync(this.dir, { recursive: true });
+          const file = path2.join(this.dir, "state.json");
+          fs2.writeFileSync(file + ".tmp", JSON.stringify({ pid: process.pid, updated: Date.now(), zones: Object.fromEntries(this.state) }));
+          fs2.renameSync(file + ".tmp", file);
+        } catch (e) {
+          this.log("warn", "lyrics state: " + e.message);
+        }
+      }
+      _write(meta, lrc) {
+        const artist = String(meta.artist || "").split(" / ").join(", ");
+        const name = segment(artist ? `${artist} - ${meta.title}` : meta.title, "Unknown Track");
+        const file = path2.join(this.dir, segment(meta.album, "Unknown Album"), name + ".lrc");
         try {
           let existing = null;
           try {
-            existing = fs2.readFileSync(lrcPath, "utf8");
+            existing = fs2.readFileSync(file, "utf8");
           } catch {
           }
-          if (existing !== entry.lrc) {
-            fs2.mkdirSync(path2.dirname(lrcPath), { recursive: true });
-            fs2.writeFileSync(lrcPath + ".tmp", entry.lrc);
-            fs2.renameSync(lrcPath + ".tmp", lrcPath);
+          if (existing !== lrc) {
+            fs2.mkdirSync(path2.dirname(file), { recursive: true });
+            fs2.writeFileSync(file + ".tmp", lrc);
+            fs2.renameSync(file + ".tmp", file);
             this._prune();
           }
+          return file;
         } catch (e) {
           this.log("warn", "lyrics: " + e.message);
           return "";
         }
-        return "file://" + base.split(path2.sep).map(encodeURIComponent).join("/") + ".roon";
       }
-      // Plain text for xesam:asText, timestamps stripped.
-      plainText(entry) {
-        if (!entry) return "";
-        return entry.lrc.split("\n").filter((l) => !/^\[[a-z]+:.*\]\s*$/i.test(l.trim())).map((l) => l.replace(/\[\d+:\d+(?:[.:]\d+)?\]/g, "").replace(/<\d+:\d+(?:[.:]\d+)?>/g, "").trim()).join("\n").trim();
-      }
-      // Keep the newest sidecars; lyrics are cheap to get again from Roon.
+      // Keep the newest .lrc files; lyrics are cheap to get again from Roon.
       _prune() {
         try {
           const files = [];
@@ -25355,7 +25382,7 @@ function main() {
   const bridge = new RoonBridge({ ...opts, log });
   const browse = new BrowseSessions(bridge);
   const lyrics = new LyricsStore(opts.cacheDir, log);
-  const mpris = new MprisBridge(bridge, log, lyrics);
+  const mpris = new MprisBridge(bridge, log);
   const display = opts.displayZone ? new RoonDisplay({ stateDir: opts.stateDir, log }) : null;
   let mprisWanted = false;
   let queueWanted = false;
@@ -25375,17 +25402,10 @@ function main() {
     mpris.onSeek(s.zoneId, s.position);
   });
   bridge.on("queue", (q) => proto.send({ type: "queue", ...q }));
-  bridge.decorateNowPlaying = (raw, np) => {
-    const entry = lyrics.current(raw.zone_id, raw);
-    np.lyricsUrl = entry ? lyrics.trackUrl(entry, np) : "";
-  };
   const onLyrics = /* @__PURE__ */ __name((l) => {
     if (!lyrics.set(l.zoneId, l.key, l.lrc, l.track)) return;
     const entry = lyrics.get(l.zoneId);
     proto.send({ type: "lyrics", zoneId: l.zoneId, lrc: entry ? entry.lrc : "" });
-    const raw = bridge.zones.get(l.zoneId);
-    if (raw) proto.send({ type: "zone_changed", zone: bridge.normalizeZone(raw) });
-    if (l.zoneId === bridge.selectedZoneId) mpris.update();
   }, "onLyrics");
   const waveforms = /* @__PURE__ */ new Map();
   const unsynced = /* @__PURE__ */ new Set();
@@ -25402,6 +25422,7 @@ function main() {
     waveforms.clear();
     for (const zoneId of unsynced) proto.send({ type: "lyrics_unsynced", zoneId, value: false });
     unsynced.clear();
+    lyrics.clearState();
   }, "clearLyrics");
   if (display) {
     display.on("waveform", (w) => {
@@ -25412,6 +25433,7 @@ function main() {
       proto.send({ type: "waveform", zoneId: w.zoneId, waveform: w.waveform || [] });
     });
     display.on("lyrics", (l) => {
+      lyrics.report(l);
       onLyrics(l);
       onUnsynced(l);
     });

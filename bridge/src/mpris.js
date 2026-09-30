@@ -11,9 +11,8 @@ try {
 
 // Mirrors the selected Roon zone as org.mpris.MediaPlayer2.roon.
 class MprisBridge {
-  constructor(bridge, log, lyrics) {
+  constructor(bridge, log) {
     this.bridge = bridge;
-    this.lyrics = lyrics || null;
     this.log = log || (() => {});
     this.player = null;
     this.zoneId = null;
@@ -167,11 +166,6 @@ class MprisBridge {
       };
       const art = this.bridge.artUrl(np.imageKey, 600);
       if (art) meta["mpris:artUrl"] = art;
-      // Roon's lyrics reach the DMS lyrics view as an .lrc sidecar of xesam:url.
-      if (np.lyricsUrl) {
-        meta["xesam:url"] = np.lyricsUrl;
-        meta["xesam:asText"] = this.lyrics ? this.lyrics.plainText(this.lyrics.current(z.zoneId, raw)) : "";
-      }
       if (trackId !== this._lastTrackId) {
         this._lastTrackId = trackId;
         this._resyncSeeks = 3;
