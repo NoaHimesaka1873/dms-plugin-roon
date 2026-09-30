@@ -881,13 +881,6 @@ Singleton {
                     NiriService.focusWindow(w.id);
                     return true;
                 }
-            } else if (CompositorService.isHyprland) {
-                const wins = HyprlandService.windows || [];
-                const w = wins.find(x => x.title === title);
-                if (w && (w.address || w.id)) {
-                    HyprlandService.focusWindow(w.address || w.id);
-                    return true;
-                }
             }
         } catch (e) {
             console.warn("[roon] window focus failed:", e);

@@ -257,64 +257,13 @@ PluginComponent {
                         }
                     }
 
-                    // Own marquee instead of ScrollingText: never elides, scrolls with
-                    // holds at both ends, resets when the text changes.
-                    Item {
+                    ScrollingText {
                         id: pillLabel
                         anchors.fill: parent
-                        readonly property real implicitTextWidth: marqueeText.implicitWidth
-                        readonly property real overflow: Math.max(0, marqueeText.implicitWidth - width)
-                        readonly property bool scrolling: overflow > 0 && RoonService.isPlaying && SettingsData.scrollTitleEnabled && visible
-                        property real offset: 0
-                        property int direction: 1
-                        property real holdMs: 2000
-
-                        function reset() {
-                            offset = 0;
-                            direction = 1;
-                            holdMs = 2000;
-                        }
-
-                        onScrollingChanged: reset()
-                        onOverflowChanged: reset()
-
-                        StyledText {
-                            id: marqueeText
-                            x: -Math.round(pillLabel.offset)
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: implicitWidth
-                            elide: Text.ElideNone
-                            wrapMode: Text.NoWrap
-                            text: root.pillText
-                            color: Theme.widgetTextColor
-                            font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale, root.barConfig?.maximizeWidgetText)
-                            onTextChanged: pillLabel.reset()
-                        }
-
-                        Timer {
-                            interval: 40
-                            repeat: true
-                            running: pillLabel.scrolling && root.surfaceLive
-                            onTriggered: {
-                                if (pillLabel.holdMs > 0) {
-                                    pillLabel.holdMs -= interval;
-                                    return;
-                                }
-                                const max = pillLabel.overflow + 4;
-                                const next = pillLabel.offset + pillLabel.direction * interval / 60;
-                                if (next >= max) {
-                                    pillLabel.offset = max;
-                                    pillLabel.direction = -1;
-                                    pillLabel.holdMs = 2000;
-                                } else if (next <= 0) {
-                                    pillLabel.offset = 0;
-                                    pillLabel.direction = 1;
-                                    pillLabel.holdMs = 2000;
-                                } else {
-                                    pillLabel.offset = next;
-                                }
-                            }
-                        }
+                        text: root.pillText
+                        color: Theme.widgetTextColor
+                        font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale, root.barConfig?.maximizeWidgetText)
+                        active: RoonService.isPlaying && root.surfaceLive
                     }
                 }
 

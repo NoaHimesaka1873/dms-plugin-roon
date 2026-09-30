@@ -318,34 +318,11 @@ PluginSettings {
         width: parent.width
         spacing: Theme.spacingS
 
-        Rectangle {
+        DankTextField {
+            id: nameInput
+            anchors.verticalCenter: parent.verticalCenter
             width: parent.width - sizePicker.width - addButton.width - Theme.spacingS * 2
-            height: 40
-            radius: Theme.cornerRadius
-            color: Theme.surfaceContainerHigh
-            border.width: nameInput.activeFocus ? 2 : 1
-            border.color: nameInput.activeFocus ? Theme.primary : Theme.withAlpha(Theme.outline, 0.3)
-
-            TextInput {
-                id: nameInput
-                anchors.fill: parent
-                anchors.leftMargin: Theme.spacingM
-                anchors.rightMargin: Theme.spacingM
-                verticalAlignment: TextInput.AlignVCenter
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.surfaceText
-                selectionColor: Theme.primary
-                selectedTextColor: Theme.onPrimary
-                clip: true
-
-                StyledText {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Variant name (e.g. Compact)"
-                    visible: nameInput.text.length === 0 && !nameInput.activeFocus
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.surfaceVariantText
-                }
-            }
+            placeholderText: "Variant name (e.g. Compact)"
         }
 
         DankDropdown {

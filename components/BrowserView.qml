@@ -8,7 +8,7 @@ Item {
     id: root
 
     property string pendingInputKey: ""
-    readonly property real contentHeight: navRow.height + searchBox.height + Theme.spacingS * 2 + (RoonService.browseItems.length > 0 ? list.contentHeight : 140)
+    readonly property real contentHeight: navRow.height + searchField.height + Theme.spacingS * 2 + (RoonService.browseItems.length > 0 ? list.contentHeight : 140)
 
     Component.onCompleted: {
         if (RoonService.browseItems.length === 0 && RoonService.paired)
@@ -64,7 +64,7 @@ Item {
             return;
         if (item.inputPrompt) {
             root.pendingInputKey = item.itemKey;
-            searchField.placeholder = item.inputPrompt.prompt || "Search";
+            searchField.placeholderText = item.inputPrompt.prompt || "Search";
             searchField.forceActiveFocus();
             return;
         }
@@ -125,77 +125,37 @@ Item {
             }
         }
 
-        Rectangle {
-            id: searchBox
+        DankTextField {
+            id: searchField
+            readonly property string defaultPlaceholder: "Search Roon library"
             width: parent.width
-            height: 36
-            radius: Theme.cornerRadius
-            color: Theme.surfaceContainerHigh
-            border.width: searchField.activeFocus ? 2 : 1
-            border.color: searchField.activeFocus ? Theme.primary : Theme.withAlpha(Theme.outline, 0.3)
-
-            Row {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.spacingS
-                anchors.rightMargin: Theme.spacingXS
-                spacing: Theme.spacingXS
-
-                DankIcon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: "search"
-                    size: Theme.iconSize - 4
-                    color: Theme.surfaceVariantText
+            leftIconName: "search"
+            showClearButton: true
+            placeholderText: defaultPlaceholder
+            onAccepted: {
+                const q = text.trim();
+                if (!q)
+                    return;
+                if (root.pendingInputKey) {
+                    RoonService.browseInput(root.pendingInputKey, q);
+                    root.pendingInputKey = "";
+                    placeholderText = defaultPlaceholder;
+                } else {
+                    RoonService.browseSearch(q);
                 }
-
-                TextInput {
-                    id: searchField
-                    property string placeholder: "Search Roon library"
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - (Theme.iconSize - 4) - 28 - Theme.spacingXS * 2
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.surfaceText
-                    selectionColor: Theme.primary
-                    selectedTextColor: Theme.onPrimary
-                    clip: true
-                    onAccepted: {
-                        const q = text.trim();
-                        if (!q)
-                            return;
-                        if (root.pendingInputKey) {
-                            RoonService.browseInput(root.pendingInputKey, q);
-                            root.pendingInputKey = "";
-                        } else {
-                            RoonService.browseSearch(q);
-                        }
-                    }
-
-                    StyledText {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: searchField.placeholder
-                        visible: searchField.text.length === 0 && !searchField.activeFocus
-                        font.pixelSize: Theme.fontSizeMedium
-                        color: Theme.surfaceVariantText
-                    }
-                }
-
-                DankActionButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    iconName: "close"
-                    buttonSize: 28
-                    iconSize: Theme.iconSizeSmall
-                    visible: searchField.text.length > 0
-                    onClicked: {
-                        searchField.text = "";
-                        root.pendingInputKey = "";
-                        searchField.placeholder = "Search Roon library";
-                    }
+            }
+            // Clearing the field also drops a pending Roon input prompt.
+            onTextChanged: {
+                if (text.length === 0 && root.pendingInputKey) {
+                    root.pendingInputKey = "";
+                    placeholderText = defaultPlaceholder;
                 }
             }
         }
 
         Item {
             width: parent.width
-            height: parent.height - navRow.height - searchBox.height - Theme.spacingS * 2
+            height: parent.height - navRow.height - searchField.height - Theme.spacingS * 2
 
             DankListView {
                 id: list
